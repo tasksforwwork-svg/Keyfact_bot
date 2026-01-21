@@ -31,10 +31,10 @@ def save_state(state):
 
 # ---------- загрузка фактов ----------
 def load_facts():
-    with open(FACTS_PATH, "r", encoding="utf-8") as f:
+    with open("facts.txt", "r", encoding="utf-8") as f:
         text = f.read()
 
-    facts = [f.strip() for f in text.split("===") if f.strip()]
+    facts = [f.strip() for f in text.split("Факт -") if f.strip()]
     return facts
 
 
@@ -117,3 +117,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
