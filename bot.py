@@ -13,13 +13,16 @@ FACTS_PATH = "facts.txt"
 STATE_FILE = "state.json"
 # ==============================================
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = OPENAI_API_KEY
 
 
 # ---------- работа с состоянием ----------
 def load_state():
     if not os.path.exists(STATE_FILE):
-        return {"last_date": None, "used_facts": []}
+        return {
+            "last_date": None,
+            "used_facts": []
+        }
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -31,7 +34,7 @@ def save_state(state):
 
 # ---------- загрузка фактов ----------
 def load_facts():
-    with open("facts.txt", "r", encoding="utf-8") as f:
+    with open(FACTS_PATH, "r", encoding="utf-8") as f:
         text = f.read()
 
     facts = [f.strip() for f in text.split("Факт -") if f.strip()]
@@ -46,11 +49,11 @@ def generate_text(fact):
 Факт:
 {fact}
 
-Требования к стилю:
-- энциклопедический
+Требования:
+- энциклопедический стиль
+- плотный интеллектуальный текст
 - без разговорных слов
-- без морали
-- плотный, интеллектуальный текст
+- без морализаторства
 
 Структура:
 1. Краткое определение
@@ -59,13 +62,13 @@ def generate_text(fact):
 4. Почему этот факт хорош для ЧГК
 """
 
-    response = client.responses.create(
-        model="gpt-5-mini",
-        input=prompt,
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
     )
 
-    return response.output_text
+    return response.choices[0].message.content
 
 
 # ---------- логика "факт дня" ----------
@@ -74,7 +77,7 @@ def send_daily_fact(update, context):
     today = str(datetime.date.today())
 
     if state["last_date"] == today:
-        update.message.reply_text("Факт дня уже был сегодня 🙂")
+        update.message.reply_text("Факт дня уже был сегодня.")
         return
 
     facts = load_facts()
@@ -97,7 +100,7 @@ def send_daily_fact(update, context):
 # ---------- команды ----------
 def start(update, context):
     update.message.reply_text(
-        "Привет! Я буду присылать тебе один ЧГК-факт в день.\n"
+        "Привет. Я буду присылать один ЧГК-факт в день.\n"
         "Первый — прямо сейчас."
     )
     send_daily_fact(update, context)
@@ -117,5 +120,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
