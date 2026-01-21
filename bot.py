@@ -3,7 +3,7 @@ import json
 import datetime
 import random
 from telegram.ext import Updater, CommandHandler
-from openai import OpenAI
+import openai
 
 # ================== НАСТРОЙКИ ==================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -117,4 +117,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
