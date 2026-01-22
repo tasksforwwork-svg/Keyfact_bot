@@ -2,39 +2,43 @@ import os
 import json
 import random
 import datetime
-import time
-import threading
+import asyncio
 import pandas as pd
-from telegram import Bot, Update
-from telegram.ext import Updater, CommandHandler, CallbackContext
+
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+)
+
 from openai import OpenAI
 
-# ================== НАСТРОЙКИ ==================
+# ================= НАСТРОЙКИ =================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-CHAT_ID = os.getenv("CHAT_ID")
+CHAT_ID = int(os.getenv("CHAT_ID"))
 
 FACTS_FILE = "facts.xlsx"
 STATE_FILE = "state.json"
 
 SCHEDULE_HOURS = ["11", "15", "20"]
-# ==============================================
+# =============================================
 
-bot = Bot(token=TELEGRAM_TOKEN)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ---------- состояние ----------
 def load_state():
     today = str(datetime.date.today())
     if not os.path.exists(STATE_FILE):
-        return {"date": today, "sent_hours": [], "used_facts": []}
+        return {"date": today, "sent": [], "used": []}
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
 
-    if state.get("date") != today:
+    if state["date"] != today:
         state["date"] = today
-        state["sent_hours"] = []
+        state["sent"] = []
 
     return state
 
@@ -48,5 +52,110 @@ def save_state(state):
 def load_facts():
     df = pd.read_excel(FACTS_FILE)
     return [
-        str(cell).strip()
-        for cel
+        str(x).strip()
+        for x in df.iloc[:, 0]
+        if isinstance(x, str) and x.strip()
+    ]
+
+
+# ---------- GPT-редактор ----------
+def rewrite_fact(raw):
+    prompt = f"""
+Ты редактор ЧГК-паблика Cool Bingo.
+
+Оформи факт в формате ЧГК-досье.
+
+Структура:
+Факт —
+Краткое определение
+Историко-культурный контекст
+Неочевидные детали
+Связи с другими областями
+Почему это хорошо работает в ЧГК
+Ассоциативные якоря
+
+Требования:
+— 10–14 предложений
+— энциклопедический стиль
+— без разговорных слов
+— без морали
+
+Исходный факт:
+{raw}
+
+Выводи только готовый текст.
+"""
+
+    r = client.responses.create(
+        model="gpt-4.1-mini",
+        input=prompt,
+        temperature=0.55,
+    )
+
+    return r.output_text.strip()
+
+
+# ---------- отправка ----------
+async def send_fact(context: ContextTypes.DEFAULT_TYPE, mark=None):
+    state = load_state()
+    facts = load_facts()
+    unused = [f for f in facts if f not in state["used"]]
+
+    if not unused:
+        return
+
+    raw = random.choice(unused)
+    text = rewrite_fact(raw)
+
+    await context.bot.send_message(
+        chat_id=CHAT_ID,
+        text=text[:4096]
+    )
+
+    state["used"].append(raw)
+    if mark:
+        state["sent"].append(mark)
+    save_state(state)
+
+
+# ---------- команды ----------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Я присылаю 3 ЧГК-факта в день:\n"
+        "🕚 11:00\n🕒 15:00\n🕗 20:00\n\n"
+        "Команда /fact — получить факт сразу."
+    )
+
+
+async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_fact(context)
+    await update.message.reply_text("☝️ Вот ваш факт.")
+
+
+# ---------- расписание ----------
+async def scheduler(app):
+    while True:
+        now = datetime.datetime.now()
+        hour = now.strftime("%H")
+
+        state = load_state()
+
+        if hour in SCHEDULE_HOURS and hour not in state["sent"]:
+            await send_fact(app.bot, mark=hour)
+
+        await asyncio.sleep(60)
+
+
+# ---------- запуск ----------
+async def main():
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("fact", manual_fact))
+
+    asyncio.create_task(scheduler(app))
+    await app.run_polling()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
