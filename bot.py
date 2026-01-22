@@ -1,118 +1,112 @@
 import os
-import json
-import datetime
 import random
+import requests
+from bs4 import BeautifulSoup
 from telegram.ext import Updater, CommandHandler
-import openai
+from openai import OpenAI
 
-# ================== НАСТРОЙКИ ==================
+# ================= НАСТРОЙКИ =================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-FACTS_PATH = "facts.txt"
-STATE_FILE = "state.json"
-# ==============================================
+BASE_URL = "https://gotquestions.online"
+# =============================================
 
-openai.api_key = OPENAI_API_KEY
-
-
-# ---------- работа с состоянием ----------
-def load_state():
-    if not os.path.exists(STATE_FILE):
-        return {
-            "last_date": None,
-            "used_facts": []
-        }
-    with open(STATE_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 
-def save_state(state):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+# ---------- получаем случайный ЧГК-факт ----------
+def get_raw_fact():
+    main = requests.get(BASE_URL, timeout=15)
+    soup = BeautifulSoup(main.text, "html.parser")
+
+    links = [
+        a["href"] for a in soup.select("a[href]")
+        if a["href"].startswith("/question/")
+    ]
+
+    if not links:
+        return None
+
+    url = BASE_URL + random.choice(links)
+    page = requests.get(url, timeout=15)
+    soup = BeautifulSoup(page.text, "html.parser")
+
+    title = soup.find("h1")
+    article = soup.find("article")
+
+    if not title or not article:
+        return None
+
+    text = article.get_text("\n", strip=True)
+
+    return f"{title.text}\n\n{text}"
 
 
-# ---------- загрузка фактов ----------
-def load_facts():
-    with open(FACTS_PATH, "r", encoding="utf-8") as f:
-        text = f.read()
-
-    facts = [f.strip() for f in text.split("Факт -") if f.strip()]
-    return facts
-
-
-# ---------- генерация текста ----------
-def generate_text(fact):
+# ---------- GPT-редактор ----------
+def edit_with_gpt(raw_text):
     prompt = f"""
-Ты пишешь текст в формате ЧГК-досье.
+Ты — редактор ЧГК-досье.
 
-Факт:
-{fact}
+На входе — текст из базы вопросов ЧГК.
+Твоя задача — превратить его в компактный,
+энциклопедический факт «из того же ряда», что:
+
+- Бульдозерная выставка
+- Волшебная гора
+- Бутон розы
 
 Требования:
-- энциклопедический стиль
-- плотный интеллектуальный текст
+- строгий, интеллектуальный стиль
 - без разговорных слов
 - без морализаторства
+- без вопросов читателю
+- 1–2 абзаца
+- начинается со слова: «Факт.»
 
-Структура:
-1. Краткое определение
-2. Историко-культурный контекст
-3. Неочевидные детали и перекрёстные отсылки
-4. Почему этот факт хорош для ЧГК
+Исходный текст:
+{raw_text}
 """
 
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
+    response = client.responses.create(
+        model="gpt-5-mini",
+        input=prompt,
+        temperature=0.6,
     )
 
-    return response.choices[0].message.content
+    return response.output_text.strip()
 
 
-# ---------- логика "факт дня" ----------
-def send_daily_fact(update, context):
-    state = load_state()
-    today = str(datetime.date.today())
+# ---------- Telegram ----------
+def send_fact(update, context):
+    raw = get_raw_fact()
 
-    if state["last_date"] == today:
-        update.message.reply_text("Факт дня уже был сегодня.")
+    if not raw:
+        update.message.reply_text("Не удалось получить факт. Попробуй позже.")
         return
 
-    facts = load_facts()
-    unused = [f for f in facts if f not in state["used_facts"]]
-
-    if not unused:
-        update.message.reply_text("Факты закончились.")
+    try:
+        final_text = edit_with_gpt(raw)
+    except Exception as e:
+        update.message.reply_text("Ошибка при обработке факта.")
         return
 
-    fact = random.choice(unused)
-    text = generate_text(fact)
-
-    update.message.reply_text(text[:4096])
-
-    state["last_date"] = today
-    state["used_facts"].append(fact)
-    save_state(state)
+    update.message.reply_text(final_text[:4096])
 
 
-# ---------- команды ----------
 def start(update, context):
     update.message.reply_text(
-        "Привет. Я буду присылать один ЧГК-факт в день.\n"
-        "Первый — прямо сейчас."
+        "Привет.\nЯ присылаю отредактированные ЧГК-факты.\n\nВот один из них:"
     )
-    send_daily_fact(update, context)
+    send_fact(update, context)
 
 
-# ---------- запуск ----------
 def main():
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("fact", send_daily_fact))
+    dp.add_handler(CommandHandler("fact", send_fact))
 
     updater.start_polling()
     updater.idle()
