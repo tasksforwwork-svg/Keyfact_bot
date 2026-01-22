@@ -24,30 +24,23 @@ STATE_FILE = "state.json"
 SCHEDULE_HOURS = ["11", "15", "20"]
 # =============================================
 
-if not TELEGRAM_TOKEN:
-    raise RuntimeError("TELEGRAM_TOKEN не задан")
-
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY не задан")
-
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+
 # ---------- состояние ----------
-def load_state(chat_id):
+def load_state():
     today = str(datetime.date.today())
 
     if not os.path.exists(STATE_FILE):
-        return {str(chat_id): {"date": today, "sent": [], "used": []}}
+        return {}
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    if str(chat_id) not in data:
-        data[str(chat_id)] = {"date": today, "sent": [], "used": []}
-
-    if data[str(chat_id)]["date"] != today:
-        data[str(chat_id)]["date"] = today
-        data[str(chat_id)]["sent"] = []
+    for chat_id, state in data.items():
+        if state.get("date") != today:
+            state["date"] = today
+            state["sent"] = []
 
     return data
 
@@ -68,36 +61,35 @@ def load_facts():
 
 
 # ---------- GPT-редактор ----------
-async def rewrite_fact(raw):
+def rewrite_fact(raw_fact: str) -> str:
     prompt = f"""
 Ты редактор ЧГК-паблика Cool Bingo.
 
 Оформи факт в формате ЧГК-досье.
 
-Структура:
+Строгая структура:
 Факт —
-Краткое определение.
-Историко-культурный контекст.
-Неочевидные детали и скрытые смыслы.
-Связи с другими областями знания.
-Почему этот факт хорошо работает в ЧГК.
-Ассоциативные якоря (ложные ходы, маскировка).
+Краткое определение
+Историко-культурный контекст
+Неочевидные детали
+Связи с другими областями
+Почему это хорошо работает в ЧГК
+Ассоциативные якоря
 
 Требования:
 — 10–14 предложений
-— энциклопедический стиль
+— плотный энциклопедический стиль
 — без разговорных слов
-— без морали
-— без вопросов
+— без морали и оценок
+— текст должен выглядеть как готовый пост
 
 Исходный факт:
-{raw}
+{raw_fact}
 
 Выводи только готовый текст.
 """
 
-    response = await asyncio.to_thread(
-        client.responses.create,
+    response = client.responses.create(
         model="gpt-4.1-mini",
         input=prompt,
         temperature=0.55,
@@ -107,21 +99,30 @@ async def rewrite_fact(raw):
 
 
 # ---------- отправка ----------
-async def send_fact_to_chat(chat_id, context, mark=None):
-    data = load_state(chat_id)
+async def send_fact(chat_id: int, app, mark: str | None = None):
+    data = load_state()
+
+    if str(chat_id) not in data:
+        data[str(chat_id)] = {
+            "date": str(datetime.date.today()),
+            "sent": [],
+            "used": [],
+        }
+
     state = data[str(chat_id)]
-
     facts = load_facts()
-    unused = [f for f in facts if f not in state["used"]]
 
+    unused = [f for f in facts if f not in state["used"]]
     if not unused:
-        await context.bot.send_message(chat_id, "Факты закончились.")
+        await app.bot.send_message(chat_id, "Факты закончились.")
         return
 
     raw = random.choice(unused)
-    text = await rewrite_fact(raw)
 
-    await context.bot.send_message(chat_id, text[:4096])
+    # GPT — в отдельном потоке, чтобы не блокировать event loop
+    text = await asyncio.to_thread(rewrite_fact, raw)
+
+    await app.bot.send_message(chat_id, text[:4096])
 
     state["used"].append(raw)
     if mark:
@@ -140,53 +141,49 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Команда /fact — получить факт сразу."
     )
 
+    chat_id = update.effective_chat.id
+    data = load_state()
+    if str(chat_id) not in data:
+        data[str(chat_id)] = {
+            "date": str(datetime.date.today()),
+            "sent": [],
+            "used": [],
+        }
+        save_state(data)
+
 
 async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.message.reply_text("Подбираю факт…")
-        await send_fact_to_chat(update.effective_chat.id, context)
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка:\n{e}")
+    chat_id = update.effective_chat.id
+    await update.message.reply_text("Готовлю факт…")
+    await send_fact(chat_id, context.application)
 
 
-# ---------- расписание ----------
+# ---------- планировщик ----------
 async def scheduler(app):
     while True:
         now = datetime.datetime.now()
         hour = now.strftime("%H")
 
-        if not os.path.exists(STATE_FILE):
-            await asyncio.sleep(60)
-            continue
-
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = load_state()
 
         for chat_id, state in data.items():
             if hour in SCHEDULE_HOURS and hour not in state["sent"]:
-                await send_fact_to_chat(int(chat_id), app.bot, mark=hour)
+                await send_fact(int(chat_id), app, mark=hour)
 
         await asyncio.sleep(60)
 
 
-async def on_startup(app):
-    asyncio.create_task(scheduler(app))
-
-
 # ---------- запуск ----------
-async def main():
-    app = (
-        ApplicationBuilder()
-        .token(TELEGRAM_TOKEN)
-        .post_init(on_startup)
-        .build()
-    )
+def main():
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("fact", manual_fact))
 
-    await app.run_polling()
+    app.job_queue.run_once(lambda *_: asyncio.create_task(scheduler(app)), 1)
+
+    app.run_polling()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
