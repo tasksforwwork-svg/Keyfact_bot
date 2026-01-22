@@ -1,5 +1,4 @@
-python-telegram-bot==13.15
-openai>=1.0.0
+python-telegram-bot==22.5
+openai>=1.3.0
 pandas
 openpyxl
-python-dotenv
