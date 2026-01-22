@@ -17,7 +17,6 @@ from openai import OpenAI
 # ================= НАСТРОЙКИ =================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-CHAT_ID = int(os.getenv("CHAT_ID"))
 
 FACTS_FILE = "facts.xlsx"
 STATE_FILE = "state.json"
@@ -28,24 +27,28 @@ SCHEDULE_HOURS = ["11", "15", "20"]
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ---------- состояние ----------
-def load_state():
+def load_state(chat_id):
     today = str(datetime.date.today())
+
     if not os.path.exists(STATE_FILE):
-        return {"date": today, "sent": [], "used": []}
+        return {str(chat_id): {"date": today, "sent": [], "used": []}}
 
     with open(STATE_FILE, "r", encoding="utf-8") as f:
-        state = json.load(f)
+        data = json.load(f)
 
-    if state["date"] != today:
-        state["date"] = today
-        state["sent"] = []
+    if str(chat_id) not in data:
+        data[str(chat_id)] = {"date": today, "sent": [], "used": []}
 
-    return state
+    if data[str(chat_id)]["date"] != today:
+        data[str(chat_id)]["date"] = today
+        data[str(chat_id)]["sent"] = []
+
+    return data
 
 
-def save_state(state):
+def save_state(data):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 # ---------- факты ----------
@@ -96,26 +99,27 @@ def rewrite_fact(raw):
 
 
 # ---------- отправка ----------
-async def send_fact(context: ContextTypes.DEFAULT_TYPE, mark=None):
-    state = load_state()
+async def send_fact_to_chat(chat_id, context, mark=None):
+    data = load_state(chat_id)
+    state = data[str(chat_id)]
+
     facts = load_facts()
     unused = [f for f in facts if f not in state["used"]]
 
     if not unused:
+        await context.bot.send_message(chat_id, "Факты закончились.")
         return
 
     raw = random.choice(unused)
     text = rewrite_fact(raw)
 
-    await context.bot.send_message(
-        chat_id=CHAT_ID,
-        text=text[:4096]
-    )
+    await context.bot.send_message(chat_id, text[:4096])
 
     state["used"].append(raw)
     if mark:
         state["sent"].append(mark)
-    save_state(state)
+
+    save_state(data)
 
 
 # ---------- команды ----------
@@ -128,7 +132,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_fact(context)
+    await send_fact_to_chat(update.effective_chat.id, context)
     await update.message.reply_text("☝️ Вот ваш факт.")
 
 
@@ -138,10 +142,16 @@ async def scheduler(app):
         now = datetime.datetime.now()
         hour = now.strftime("%H")
 
-        state = load_state()
+        if not os.path.exists(STATE_FILE):
+            await asyncio.sleep(60)
+            continue
 
-        if hour in SCHEDULE_HOURS and hour not in state["sent"]:
-            await send_fact(app.bot, mark=hour)
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        for chat_id, state in data.items():
+            if hour in SCHEDULE_HOURS and hour not in state["sent"]:
+                await send_fact_to_chat(int(chat_id), app.bot, mark=hour)
 
         await asyncio.sleep(60)
 
