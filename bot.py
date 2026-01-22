@@ -67,7 +67,7 @@ def rewrite_fact(raw_fact: str) -> str:
 
 Оформи факт в формате ЧГК-досье.
 
-Строгая структура:
+Структура:
 Факт —
 Краткое определение
 Историко-культурный контекст
@@ -80,8 +80,7 @@ def rewrite_fact(raw_fact: str) -> str:
 — 10–14 предложений
 — плотный энциклопедический стиль
 — без разговорных слов
-— без морали и оценок
-— текст должен выглядеть как готовый пост
+— без морали
 
 Исходный факт:
 {raw_fact}
@@ -118,8 +117,6 @@ async def send_fact(chat_id: int, app, mark: str | None = None):
         return
 
     raw = random.choice(unused)
-
-    # GPT — в отдельном потоке, чтобы не блокировать event loop
     text = await asyncio.to_thread(rewrite_fact, raw)
 
     await app.bot.send_message(chat_id, text[:4096])
@@ -133,15 +130,8 @@ async def send_fact(chat_id: int, app, mark: str | None = None):
 
 # ---------- команды ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Я присылаю 3 ЧГК-факта в день:\n"
-        "🕚 11:00\n"
-        "🕒 15:00\n"
-        "🕗 20:00\n\n"
-        "Команда /fact — получить факт сразу."
-    )
-
     chat_id = update.effective_chat.id
+
     data = load_state()
     if str(chat_id) not in data:
         data[str(chat_id)] = {
@@ -150,6 +140,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "used": [],
         }
         save_state(data)
+
+    await update.message.reply_text(
+        "Я присылаю 3 ЧГК-факта в день:\n"
+        "🕚 11:00\n"
+        "🕒 15:00\n"
+        "🕗 20:00\n\n"
+        "Команда /fact — получить факт сразу."
+    )
 
 
 async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -173,14 +171,22 @@ async def scheduler(app):
         await asyncio.sleep(60)
 
 
+# ---------- post_init ----------
+async def on_startup(app):
+    asyncio.create_task(scheduler(app))
+
+
 # ---------- запуск ----------
 def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_TOKEN)
+        .post_init(on_startup)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("fact", manual_fact))
-
-    app.job_queue.run_once(lambda *_: asyncio.create_task(scheduler(app)), 1)
 
     app.run_polling()
 
