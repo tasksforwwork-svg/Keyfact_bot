@@ -24,6 +24,12 @@ STATE_FILE = "state.json"
 SCHEDULE_HOURS = ["11", "15", "20"]
 # =============================================
 
+if not TELEGRAM_TOKEN:
+    raise RuntimeError("TELEGRAM_TOKEN не задан")
+
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY не задан")
+
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ---------- состояние ----------
@@ -62,7 +68,7 @@ def load_facts():
 
 
 # ---------- GPT-редактор ----------
-def rewrite_fact(raw):
+async def rewrite_fact(raw):
     prompt = f"""
 Ты редактор ЧГК-паблика Cool Bingo.
 
@@ -70,18 +76,19 @@ def rewrite_fact(raw):
 
 Структура:
 Факт —
-Краткое определение
-Историко-культурный контекст
-Неочевидные детали
-Связи с другими областями
-Почему это хорошо работает в ЧГК
-Ассоциативные якоря
+Краткое определение.
+Историко-культурный контекст.
+Неочевидные детали и скрытые смыслы.
+Связи с другими областями знания.
+Почему этот факт хорошо работает в ЧГК.
+Ассоциативные якоря (ложные ходы, маскировка).
 
 Требования:
 — 10–14 предложений
 — энциклопедический стиль
 — без разговорных слов
 — без морали
+— без вопросов
 
 Исходный факт:
 {raw}
@@ -89,13 +96,14 @@ def rewrite_fact(raw):
 Выводи только готовый текст.
 """
 
-    r = client.responses.create(
+    response = await asyncio.to_thread(
+        client.responses.create,
         model="gpt-4.1-mini",
         input=prompt,
         temperature=0.55,
     )
 
-    return r.output_text.strip()
+    return response.output_text.strip()
 
 
 # ---------- отправка ----------
@@ -111,7 +119,7 @@ async def send_fact_to_chat(chat_id, context, mark=None):
         return
 
     raw = random.choice(unused)
-    text = rewrite_fact(raw)
+    text = await rewrite_fact(raw)
 
     await context.bot.send_message(chat_id, text[:4096])
 
@@ -126,31 +134,19 @@ async def send_fact_to_chat(chat_id, context, mark=None):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Я присылаю 3 ЧГК-факта в день:\n"
-        "🕚 11:00\n🕒 15:00\n🕗 20:00\n\n"
+        "🕚 11:00\n"
+        "🕒 15:00\n"
+        "🕗 20:00\n\n"
         "Команда /fact — получить факт сразу."
     )
 
 
 async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Факт запрошен. Начинаю обработку…")
-
     try:
-        await update.message.reply_text("1️⃣ Загружаю факты")
-        facts = load_facts()
-        await update.message.reply_text(f"Фактов найдено: {len(facts)}")
-
-        await update.message.reply_text("2️⃣ Беру случайный факт")
-        raw = random.choice(facts)
-
-        await update.message.reply_text("3️⃣ Отправляю в GPT")
-        text = rewrite_fact(raw)
-
-        await update.message.reply_text("4️⃣ Готово, отправляю факт")
-        await update.message.reply_text(text[:4096])
-
+        await update.message.reply_text("Подбираю факт…")
+        await send_fact_to_chat(update.effective_chat.id, context)
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка:\n{e}")
-
+        await update.message.reply_text(f"Ошибка:\n{e}")
 
 
 # ---------- расписание ----------
@@ -173,17 +169,24 @@ async def scheduler(app):
         await asyncio.sleep(60)
 
 
+async def on_startup(app):
+    asyncio.create_task(scheduler(app))
+
+
 # ---------- запуск ----------
 async def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_TOKEN)
+        .post_init(on_startup)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("fact", manual_fact))
 
-    asyncio.create_task(scheduler(app))
     await app.run_polling()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-
