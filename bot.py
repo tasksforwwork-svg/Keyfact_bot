@@ -4,13 +4,14 @@ import random
 import datetime
 import time
 import pandas as pd
-from telegram import Bot
+from telegram import Bot, Update
+from telegram.ext import Updater, CommandHandler, CallbackContext
 from openai import OpenAI
 
 # ================== НАСТРОЙКИ ==================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-CHAT_ID = os.getenv("CHAT_ID")  # ОБЯЗАТЕЛЬНО
+CHAT_ID = os.getenv("CHAT_ID")
 
 FACTS_FILE = "facts.xlsx"
 STATE_FILE = "state.json"
@@ -64,12 +65,22 @@ def rewrite_fact(raw_fact):
 
 Перепиши факт в формате ЧГК-досье.
 
+Формат:
+Факт — …
+
+Структура:
+1. Краткое определение
+2. Историко-культурный контекст
+3. Неочевидные детали
+4. Связи с другими областями
+5. Почему это хорошо работает в ЧГК
+6. Ассоциативные якоря
+
 Требования:
-— начинается с «Факт — …»
 — 8–14 предложений
-— плотный интеллектуальный стиль
-— без морали и разговорности
-— обязательны: контекст, неочевидность, ЧГК-ценность, ассоциативные якоря
+— энциклопедический стиль
+— без разговорных слов
+— без морали
 
 Исходный факт:
 {raw_fact}
@@ -86,8 +97,29 @@ def rewrite_fact(raw_fact):
     return response.output_text.strip()
 
 
-# ---------- основная логика ----------
-def send_scheduled_facts():
+# ---------- отправка факта ----------
+def send_fact(mark_slot: str | None = None):
+    state = load_state()
+    facts = load_facts()
+    unused = [f for f in facts if f not in state["used_facts"]]
+
+    if not unused:
+        return
+
+    raw_fact = random.choice(unused)
+    text = rewrite_fact(raw_fact)
+
+    bot.send_message(chat_id=CHAT_ID, text=text[:4096])
+
+    state["used_facts"].append(raw_fact)
+    if mark_slot:
+        state["sent_slots"].append(mark_slot)
+
+    save_state(state)
+
+
+# ---------- расписание ----------
+def scheduled_loop():
     while True:
         now = datetime.datetime.now()
         hour = now.strftime("%H")
@@ -95,24 +127,37 @@ def send_scheduled_facts():
         state = load_state()
 
         if hour in SCHEDULE and hour not in state["sent_slots"]:
-            facts = load_facts()
-            unused = [f for f in facts if f not in state["used_facts"]]
-
-            if unused:
-                raw_fact = random.choice(unused)
-                text = rewrite_fact(raw_fact)
-
-                bot.send_message(
-                    chat_id=CHAT_ID,
-                    text=text[:4096]
-                )
-
-                state["used_facts"].append(raw_fact)
-                state["sent_slots"].append(hour)
-                save_state(state)
+            send_fact(mark_slot=hour)
 
         time.sleep(60)
 
 
+# ---------- команды ----------
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text(
+        "Я присылаю 3 ЧГК-факта в день:\n"
+        "11:00, 15:00 и 20:00.\n\n"
+        "Команда /fact — получить факт прямо сейчас."
+    )
+
+
+def manual_fact(update: Update, context: CallbackContext):
+    send_fact()
+    update.message.reply_text("☝️ Вот ваш факт.")
+
+
+# ---------- запуск ----------
+def main():
+    updater = Updater(TELEGRAM_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("fact", manual_fact))
+
+    updater.start_polling()
+
+    scheduled_loop()
+
+
 if __name__ == "__main__":
-    send_scheduled_facts()
+    main()
