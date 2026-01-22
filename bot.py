@@ -132,8 +132,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_fact_to_chat(update.effective_chat.id, context)
-    await update.message.reply_text("☝️ Вот ваш факт.")
+    await update.message.reply_text("Факт запрошен. Начинаю обработку…")
+
+    try:
+        await update.message.reply_text("1️⃣ Загружаю факты")
+        facts = load_facts()
+        await update.message.reply_text(f"Фактов найдено: {len(facts)}")
+
+        await update.message.reply_text("2️⃣ Беру случайный факт")
+        raw = random.choice(facts)
+
+        await update.message.reply_text("3️⃣ Отправляю в GPT")
+        text = rewrite_fact(raw)
+
+        await update.message.reply_text("4️⃣ Готово, отправляю факт")
+        await update.message.reply_text(text[:4096])
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка:\n{e}")
+
 
 
 # ---------- расписание ----------
@@ -169,3 +186,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
