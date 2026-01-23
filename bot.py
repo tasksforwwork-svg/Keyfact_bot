@@ -2,7 +2,6 @@ import os
 import json
 import random
 import datetime
-import asyncio
 import pandas as pd
 
 from telegram import Update
@@ -14,39 +13,27 @@ from telegram.ext import (
 
 from openai import OpenAI
 
-# ================= НАСТРОЙКИ =================
+
+# ================== НАСТРОЙКИ ==================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 FACTS_FILE = "facts.xlsx"
 STATE_FILE = "state.json"
 
-# расписание (локальное время сервера)
-SCHEDULE_TIMES = ["11:00", "15:00", "20:00"]
-# =============================================
+SEND_TIMES = [11, 15, 20]  # часы отправки
+# ===============================================
+
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ---------- состояние ----------
+
+# ================== СОСТОЯНИЕ ==================
 def load_state():
-    today = str(datetime.date.today())
-
     if not os.path.exists(STATE_FILE):
-        return {
-            "date": today,
-            "sent": [],
-            "used": [],
-            "chats": []
-        }
-
+        return {}
     with open(STATE_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    if data.get("date") != today:
-        data["date"] = today
-        data["sent"] = []
-
-    return data
+        return json.load(f)
 
 
 def save_state(state):
@@ -54,7 +41,7 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
-# ---------- загрузка фактов ----------
+# ================== ФАКТЫ ==================
 def load_facts():
     df = pd.read_excel(FACTS_FILE)
     return [
@@ -64,126 +51,138 @@ def load_facts():
     ]
 
 
-# ---------- GPT-редактор (Cool Bingo) ----------
-def rewrite_fact(raw_fact: str) -> str:
-    prompt = f"""
-Ты редактор паблика Cool Bingo (ЧГК).
+# ================== GPT-РЕДАКТОР ==================
+COOL_BINGO_PROMPT = """
+Ты редактор ЧГК-паблика Cool Bingo.
 
-Перепиши факт в формате ЧГК-досье.
+Оформи материал строго в формате ЧГК-досье.
 
-СТРОГО СОБЛЮДАЙ СТРУКТУРУ И АБЗАЦЫ:
+СТРУКТУРА:
+Факт —
+(название)
 
-Факт — <название>
+Краткое определение — 1–2 предложения.
 
-Краткое определение.
-(1–2 предложения, что это вообще такое)
+Историко-культурный контекст —
+что это, где и почему возникло.
 
-Исторический / культурный контекст.
-(когда, где, почему важно)
+Неочевидные детали —
+парадоксы, символика, скрытые смыслы.
 
-Неочевидные детали.
-(парадоксы, скрытые смыслы, неожиданные факты)
+Связи с другими областями —
+литература, кино, философия, наука, политика.
 
-Связи с другими областями.
-(литература, кино, философия, наука, политика)
+Почему это хорошо работает в ЧГК —
+как используется в вопросах.
 
-Почему это хорошо работает в ЧГК.
-(чем удобно маскируется, на что наводит)
-
-Ассоциативные якоря.
-(слова и образы, которыми его «прячут» в вопросах)
+Ассоциативные якоря —
+чем маскируется, какие ложные ходы.
 
 ТРЕБОВАНИЯ:
-— 10–14 предложений
-— энциклопедический, плотный стиль
+— 12–18 предложений
+— энциклопедический стиль
 — без разговорных слов
 — без морали и оценок
-— обязательные пустые строки между абзацами
+— абзацы ОБЯЗАТЕЛЬНЫ
+— без эмодзи
+— без списков
 
-ИСХОДНЫЙ ФАКТ:
-{raw_fact}
-
-Выводи ТОЛЬКО готовый текст.
+Исходный факт:
 """
 
+
+def rewrite_fact(raw_fact: str) -> str:
     response = client.responses.create(
         model="gpt-4.1-mini",
-        input=prompt,
+        input=COOL_BINGO_PROMPT + raw_fact,
         temperature=0.5,
     )
-
     return response.output_text.strip()
 
 
-# ---------- отправка факта ----------
-async def send_fact(app, chat_id, mark=None):
+# ================== ОТПРАВКА ==================
+async def send_fact(chat_id: int, context: ContextTypes.DEFAULT_TYPE, mark: str | None = None):
     state = load_state()
-    facts = load_facts()
+    today = str(datetime.date.today())
 
-    unused = [f for f in facts if f not in state["used"]]
+    if str(chat_id) not in state:
+        state[str(chat_id)] = {
+            "date": today,
+            "sent_marks": [],
+            "used_facts": [],
+        }
+
+    chat_state = state[str(chat_id)]
+
+    if chat_state["date"] != today:
+        chat_state["date"] = today
+        chat_state["sent_marks"] = []
+
+    if mark and mark in chat_state["sent_marks"]:
+        return
+
+    facts = load_facts()
+    unused = [f for f in facts if f not in chat_state["used_facts"]]
+
     if not unused:
-        await app.bot.send_message(chat_id, "Факты закончились.")
+        await context.bot.send_message(chat_id, "Факты закончились.")
         return
 
     raw = random.choice(unused)
     text = rewrite_fact(raw)
 
-    await app.bot.send_message(chat_id, text[:4096])
+    await context.bot.send_message(chat_id, text[:4096])
 
-    state["used"].append(raw)
+    chat_state["used_facts"].append(raw)
     if mark:
-        state["sent"].append(mark)
+        chat_state["sent_marks"].append(mark)
 
     save_state(state)
 
 
-# ---------- команды ----------
+# ================== КОМАНДЫ ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    state = load_state()
+    job_queue = context.application.job_queue
 
-    if chat_id not in state["chats"]:
-        state["chats"].append(chat_id)
-        save_state(state)
+    # очищаем старые задачи
+    for job in job_queue.jobs():
+        if job.chat_id == chat_id:
+            job.schedule_removal()
+
+    for hour in SEND_TIMES:
+        job_queue.run_daily(
+            send_scheduled_fact,
+            time=datetime.time(hour, 0),
+            name=str(hour),
+            chat_id=chat_id,
+        )
 
     await update.message.reply_text(
+        "Готово.\n\n"
         "Я присылаю 3 ЧГК-факта в день:\n"
-        "🕚 11:00\n"
-        "🕒 15:00\n"
-        "🕗 20:00\n\n"
-        "Команда /fact — получить факт сразу."
+        "🕚 11:00\n🕒 15:00\n🕗 20:00\n\n"
+        "Команда /fact — получить факт вручную."
     )
 
 
 async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    await send_fact(context.application, chat_id)
+    await send_fact(update.effective_chat.id, context)
 
 
-# ---------- планировщик ----------
-async def scheduler(app):
-    while True:
-        now = datetime.datetime.now().strftime("%H:%M")
-        state = load_state()
-
-        if now in SCHEDULE_TIMES and now not in state["sent"]:
-            for chat_id in state["chats"]:
-                await send_fact(app, chat_id, mark=now)
-
-        await asyncio.sleep(60)
+# ================== JOB ==================
+async def send_scheduled_fact(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    await send_fact(job.chat_id, context, mark=job.name)
 
 
-# ---------- запуск ----------
+# ================== ЗАПУСК ==================
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("fact", manual_fact))
 
-    async def on_startup(app):
-        asyncio.create_task(scheduler(app))
-
-    app.post_init = on_startup
     app.run_polling()
 
 
