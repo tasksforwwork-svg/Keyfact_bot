@@ -24,20 +24,37 @@ if not OPENROUTER_API_KEY:
 
 # ================== ПРОМПТ ==================
 
-PROMPT = """
-Напиши аналитическую культурную статью в стиле интеллектуального Telegram-канала Cool Bingo.
+SYSTEM_PROMPT = """
+Ты автор интеллектуального Telegram-канала в жанре ЧГК и культурной аналитики.
+Пишешь строго на русском языке.
+Никогда не переходишь на английский.
+Стиль — академический, плотный, аналитический.
+"""
+
+USER_PROMPT_TEMPLATE = """
+Оформи материал в стиле Cool Bingo.
+
+Структура:
+1. Первая строка — чёткое определение (кто/что это, годы, краткая характеристика).
+2. Далее 4–6 коротких абзацев.
+3. Обязательно:
+   — исторический контекст
+   — неочевидные детали
+   — альтернативные трактовки или версии
+   — связи с культурой, наукой или политикой
+   — игровой потенциал для ЧГК
 
 Требования:
-— 18–22 предложения
+— 18–24 предложения
 — короткие абзацы
 — высокая плотность фактов
-— академический стиль
 — без разговорных слов
 — без списков
 — без эмодзи
-— включить исторический контекст и альтернативные трактовки
+— без морали
+— язык строго русский
 
-Факт:
+Факт: {fact}
 """
 
 
@@ -73,9 +90,11 @@ def rewrite_fact(raw_fact: str):
         json={
             "model": "openrouter/free",
             "messages": [
-                {"role": "user", "content": PROMPT + raw_fact}
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": USER_PROMPT_TEMPLATE.format(fact=raw_fact)}
             ],
-            "temperature": 0.6,
+            "temperature": 0.45,
+            "max_tokens": 1200
         },
         timeout=60,
     )
@@ -85,7 +104,13 @@ def rewrite_fact(raw_fact: str):
     if "choices" not in data:
         return f"Ошибка модели: {data}"
 
-    return data["choices"][0]["message"]["content"]
+    text = data["choices"][0]["message"]["content"]
+
+    # дополнительная защита от английского
+    if any(word in text.lower() for word in [" the ", " and ", " is ", " of "]):
+        return "Модель ответила не на русском языке. Попробуйте ещё раз."
+
+    return text.strip()
 
 
 # ================== TELEGRAM ==================
@@ -97,7 +122,7 @@ async def send_long_message(bot, chat_id, text):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Бот работает.\nКоманда /fact — случайный факт."
+        "Бот запущен.\nКоманда /fact — получить случайный факт."
     )
 
 
