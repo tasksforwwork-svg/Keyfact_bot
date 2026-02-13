@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 
-# ================== НАСТРОЙКИ ==================
+# ================= НАСТРОЙКИ =================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -22,30 +22,28 @@ if not OPENROUTER_API_KEY:
     raise RuntimeError("OPENROUTER_API_KEY не задан")
 
 
-# ================== ПРОМПТ ==================
+# ================= ПРОМПТ =================
 
 SYSTEM_PROMPT = """
 Ты редактор интеллектуального Telegram-канала Cool Bingo.
 Пишешь строго на русском языке.
-Стиль энциклопедический, плотный, без воды.
-Никаких разговорных форм.
+Стиль энциклопедический, плотный, без разговорной лексики.
 Абзацы короткие.
 """
 
 USER_PROMPT_TEMPLATE = """
 Оформи материал в стиле Cool Bingo.
 
-СТРУКТУРА:
 Первая строка — чёткое определение (что это, годы, краткая характеристика).
 
 Далее 5–7 коротких абзацев.
 
 Обязательно:
-— исторический контекст возникновения
-— детали, которые редко упоминаются
+— исторический контекст
+— малоизвестные детали
 — альтернативные версии или трактовки
 — культурные или научные связи
-— почему это удобно использовать в ЧГК
+— объяснение, почему тема удобна для ЧГК
 
 Требования:
 — минимум 20 предложений
@@ -58,7 +56,7 @@ USER_PROMPT_TEMPLATE = """
 """
 
 
-# ================== ЗАГРУЗКА ФАКТОВ ==================
+# ================= ЗАГРУЗКА ФАКТОВ =================
 
 def load_facts():
     if not Path(FACTS_FILE).exists():
@@ -78,43 +76,46 @@ def load_facts():
     return facts
 
 
-# ================== ГЕНЕРАЦИЯ ==================
+# ================= ГЕНЕРАЦИЯ =================
 
 def rewrite_fact(raw_fact: str):
 
-    response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": "google/gemma-2-9b-it:free",
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": USER_PROMPT_TEMPLATE.format(fact=raw_fact)}
-            ],
-            "temperature": 0.3,
-            "max_tokens": 1800
-        },
-        timeout=90,
-    )
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "google/gemma-2-9b-it:free",
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": USER_PROMPT_TEMPLATE.format(fact=raw_fact)}
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 1800
+                },
+                timeout=120,
+            )
 
-    data = response.json()
+            data = response.json()
 
-    if "choices" not in data:
-        return f"Ошибка модели: {data}"
+            if "choices" in data:
+                text = data["choices"][0]["message"]["content"].strip()
 
-    text = data["choices"][0]["message"]["content"].strip()
+                if len(text) > 800:
+                    return text
 
-    # если текст слишком короткий — пробуем один повтор
-    if len(text) < 900:
-        return "Текст получился слишком коротким. Попробуйте ещё раз."
+            return "Модель вернула слишком короткий ответ. Попробуйте ещё раз."
 
-    return text
+        except requests.exceptions.RequestException:
+            if attempt == 2:
+                return "Сервер модели временно недоступен. Попробуйте позже."
 
 
-# ================== TELEGRAM ==================
+# ================= TELEGRAM =================
 
 async def send_long_message(bot, chat_id, text):
     for i in range(0, len(text), 4096):
@@ -141,7 +142,7 @@ async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Ошибка: {e}")
 
 
-# ================== ЗАПУСК ==================
+# ================= ЗАПУСК =================
 
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
