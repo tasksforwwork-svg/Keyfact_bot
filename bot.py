@@ -126,7 +126,7 @@ async def send_long_message(bot, chat_id, text):
 # ================= ПРИВЕТСТВИЕ =================
 
 WELCOME_TEXT = (
-    "Cool Bingo\n\n"
+    "Я сразу к сути\n\n"
     "Здесь публикуются факты, которые выглядят безобидно.\n"
     "Пока не становятся вопросом.\n\n"
     "Материалы оформлены как культурные мини-досье: "
@@ -218,3 +218,4 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, button_handler))
 print("Бот запущен")
 
 app.run_polling()
+
