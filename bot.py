@@ -14,7 +14,7 @@ from openai import OpenAI
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-SEND_TIMES = [11, 15, 20]  # часы отправки
+SEND_TIMES = [11, 15, 20]
 FACTS_FILE = "facts.txt"
 STATE_FILE = "state.json"
 
@@ -26,7 +26,7 @@ if not OPENAI_API_KEY:
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ================== ПРОМПТ COOL BINGO ==================
+# ================== ПРОМПТ ==================
 
 COOL_BINGO_PROMPT = """
 Ты редактор интеллектуального Telegram-канала в жанре ЧГК и культурной аналитики.
@@ -96,6 +96,8 @@ async def send_long_message(bot, chat_id, text):
     for i in range(0, len(text), 4096):
         await bot.send_message(chat_id, text[i:i+4096])
 
+# -------- Автоматическая отправка (без повторов) --------
+
 async def send_fact(chat_id: int, context: ContextTypes.DEFAULT_TYPE, mark=None):
     state = load_state()
     today = str(datetime.date.today())
@@ -131,7 +133,21 @@ async def send_fact(chat_id: int, context: ContextTypes.DEFAULT_TYPE, mark=None)
 
     save_state(state)
 
-# ================== КОМАНДЫ ==================
+# -------- Ручная команда /fact (всегда случайный) --------
+
+async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    facts = load_facts()
+    raw_fact = random.choice(facts)
+    text = rewrite_fact(raw_fact)
+    await send_long_message(context.bot, update.effective_chat.id, text)
+
+# -------- Планировщик --------
+
+async def send_scheduled_fact(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    await send_fact(job.chat_id, context, mark=job.name)
+
+# ================== КОМАНДА START ==================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -151,16 +167,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "Бот активирован.\n"
-        "Я буду присылать 3 факта в день: 11:00, 15:00, 20:00.\n"
-        "Команда /fact — получить факт вручную."
+        "Автоматическая отправка: 11:00, 15:00, 20:00.\n"
+        "Команда /fact — случайный факт."
     )
-
-async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_fact(update.effective_chat.id, context)
-
-async def send_scheduled_fact(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    await send_fact(job.chat_id, context, mark=job.name)
 
 # ================== ЗАПУСК ==================
 
