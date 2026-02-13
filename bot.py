@@ -2,6 +2,8 @@ import os
 import random
 from pathlib import Path
 
+import pandas as pd
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from openai import OpenAI
@@ -10,7 +12,7 @@ from openai import OpenAI
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-FACTS_FILE = "facts.txt"
+FACTS_FILE = "facts.xlsx"
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN не задан")
@@ -36,9 +38,20 @@ PROMPT = """
 
 def load_facts():
     if not Path(FACTS_FILE).exists():
-        raise RuntimeError("facts.txt не найден")
-    with open(FACTS_FILE, "r", encoding="utf-8") as f:
-        return [line.strip() for line in f if line.strip()]
+        raise RuntimeError("facts.xlsx не найден")
+
+    df = pd.read_excel(FACTS_FILE)
+
+    facts = [
+        str(x).strip()
+        for x in df.iloc[:, 0]
+        if isinstance(x, str) and x.strip()
+    ]
+
+    if not facts:
+        raise RuntimeError("В Excel нет фактов")
+
+    return facts
 
 
 def rewrite_fact(raw_fact: str) -> str:
@@ -70,8 +83,6 @@ async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = rewrite_fact(raw_fact)
     await send_long_message(context.bot, update.effective_chat.id, text)
 
-
-# === ВАЖНО: без asyncio.run ===
 
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
