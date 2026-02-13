@@ -8,8 +8,6 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 
-# ================= НАСТРОЙКИ =================
-
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
@@ -22,41 +20,36 @@ if not OPENROUTER_API_KEY:
     raise RuntimeError("OPENROUTER_API_KEY не задан")
 
 
-# ================= ПРОМПТ =================
-
 SYSTEM_PROMPT = """
 Ты редактор интеллектуального Telegram-канала Cool Bingo.
 Пишешь строго на русском языке.
-Стиль энциклопедический, плотный, без разговорной лексики.
+Стиль плотный, аналитический, энциклопедический.
 Абзацы короткие.
+Никаких разговорных слов.
 """
 
 USER_PROMPT_TEMPLATE = """
 Оформи материал в стиле Cool Bingo.
 
-Первая строка — чёткое определение (что это, годы, краткая характеристика).
+Первая строка — чёткое определение.
 
 Далее 5–7 коротких абзацев.
 
 Обязательно:
 — исторический контекст
 — малоизвестные детали
-— альтернативные версии или трактовки
+— альтернативные трактовки
 — культурные или научные связи
-— объяснение, почему тема удобна для ЧГК
+— потенциал для ЧГК
 
-Требования:
-— минимум 20 предложений
-— высокая плотность фактов
-— без списков
-— без эмодзи
-— без морали
+Минимум 18 предложений.
+Без списков.
+Без эмодзи.
+Без морали.
 
 Факт: {fact}
 """
 
-
-# ================= ЗАГРУЗКА ФАКТОВ =================
 
 def load_facts():
     if not Path(FACTS_FILE).exists():
@@ -76,8 +69,6 @@ def load_facts():
     return facts
 
 
-# ================= ГЕНЕРАЦИЯ =================
-
 def rewrite_fact(raw_fact: str):
 
     for attempt in range(3):
@@ -89,15 +80,15 @@ def rewrite_fact(raw_fact: str):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "google/gemma-2-9b-it:free",
+                    "model": "openrouter/auto",
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": USER_PROMPT_TEMPLATE.format(fact=raw_fact)}
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 1800
+                    "max_tokens": 1500
                 },
-                timeout=120,
+                timeout=90,
             )
 
             data = response.json()
@@ -105,17 +96,15 @@ def rewrite_fact(raw_fact: str):
             if "choices" in data:
                 text = data["choices"][0]["message"]["content"].strip()
 
-                if len(text) > 800:
+                if len(text) > 700:
                     return text
 
-            return "Модель вернула слишком короткий ответ. Попробуйте ещё раз."
+            return "Модель вернула короткий ответ. Попробуйте ещё раз."
 
         except requests.exceptions.RequestException:
             if attempt == 2:
-                return "Сервер модели временно недоступен. Попробуйте позже."
+                return "Модель временно недоступна. Попробуйте позже."
 
-
-# ================= TELEGRAM =================
 
 async def send_long_message(bot, chat_id, text):
     for i in range(0, len(text), 4096):
@@ -141,8 +130,6 @@ async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {e}")
 
-
-# ================= ЗАПУСК =================
 
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
