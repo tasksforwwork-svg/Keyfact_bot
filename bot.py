@@ -1,6 +1,5 @@
 import os
 import random
-import asyncio
 from pathlib import Path
 
 from telegram import Update
@@ -20,7 +19,6 @@ if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY не задан")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-
 
 PROMPT = """
 Ты редактор интеллектуального Telegram-канала в жанре ЧГК и культурной аналитики.
@@ -73,16 +71,13 @@ async def manual_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_long_message(context.bot, update.effective_chat.id, text)
 
 
-async def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+# === ВАЖНО: без asyncio.run ===
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("fact", manual_fact))
+app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    print("Бот запущен")
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("fact", manual_fact))
 
-    await app.run_polling()
+print("Бот запущен")
 
-
-if __name__ == "__main__":
-    asyncio.run(main())
+app.run_polling()
